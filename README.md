@@ -113,6 +113,20 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/leases \
   }'
 ```
 
+提前释放租约（请求体可整体省略；可选提交请求键、原因类别和说明）：
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/leases/<lease_id>/release \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_key": "release-request-0001",
+    "reason": "handover_complete",
+    "note": "现场交接完成，提前归还节点"
+  }'
+```
+
+原因类别取值：`handover_complete`、`rollback`、`node_failure`、`plan_aborted`、`operator_request`、`other`。说明最长 500 个字符，且只能与原因类别一起提交。重复释放返回原租约并复用首次原因；同键异内容返回 `idempotency_conflict`，对已结束租约发起的其他释放操作返回 `lease_release_conflict`。
+
 提交探针：
 
 ```bash
@@ -187,6 +201,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - 节点按 `ready -> leased -> ready` 变化，隔离节点不会被选中。
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
+- 释放租约可携带原因类别和说明；重复释放幂等返回原租约，未知原因类别返回 `unknown_release_reason`，对已结束租约的并发或异键释放返回 `lease_release_conflict`，终态原因不可改写。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
 

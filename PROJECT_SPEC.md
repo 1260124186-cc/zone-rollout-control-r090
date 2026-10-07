@@ -56,6 +56,9 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `state`：`claimed`、`reported`、`released` 或 `expired`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
+- `release_request_key`、`release_reason`、`release_note`：首次释放操作的幂等键、原因类别和说明。
+
+释放原因类别固定为 `handover_complete`、`rollback`、`node_failure`、`plan_aborted`、`operator_request`、`other`；说明可选且不超过 500 字符。释放请求体可整体省略。对已结束租约重复释放时返回原租约并复用首次原因，不改写终态：同键异内容返回 `idempotency_conflict`，异键释放返回 `lease_release_conflict`，未知原因类别返回 `unknown_release_reason`，已上报租约释放返回 `invalid_state`。释放审计事件在属性中带上计划、节点、分配组和可选的请求键、原因、说明。
 
 ### LeaseGroup
 

@@ -84,15 +84,18 @@ type ResolverNode struct {
 }
 
 type NodeLease struct {
-	ID           string     `json:"id"`
-	PlanID       string     `json:"plan_id"`
-	NodeID       string     `json:"node_id"`
-	AllocationID string     `json:"allocation_id"`
-	State        LeaseState `json:"state"`
-	ClaimedAt    time.Time  `json:"claimed_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	ProbeID      string     `json:"probe_id,omitempty"`
+	ID                string        `json:"id"`
+	PlanID            string        `json:"plan_id"`
+	NodeID            string        `json:"node_id"`
+	AllocationID      string        `json:"allocation_id"`
+	State             LeaseState    `json:"state"`
+	ClaimedAt         time.Time     `json:"claimed_at"`
+	ExpiresAt         time.Time     `json:"expires_at"`
+	FinishedAt        *time.Time    `json:"finished_at,omitempty"`
+	ProbeID           string        `json:"probe_id,omitempty"`
+	ReleaseRequestKey string        `json:"release_request_key,omitempty"`
+	ReleaseReason     ReleaseReason `json:"release_reason,omitempty"`
+	ReleaseNote       string        `json:"release_note,omitempty"`
 }
 
 type LeaseGroup struct {

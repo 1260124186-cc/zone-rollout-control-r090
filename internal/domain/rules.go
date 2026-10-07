@@ -53,6 +53,18 @@ func LeaseFingerprint(planID string, input LeaseInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func LeaseReleaseFingerprint(leaseID string, input ReleaseInput) string {
+	payload := fmt.Sprintf(
+		"%s|%s|%s|%s",
+		leaseID,
+		input.RequestKey,
+		input.Reason,
+		input.Note,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	payload := fmt.Sprintf(
 		"%s|%s|%t|%d|%d|%s",

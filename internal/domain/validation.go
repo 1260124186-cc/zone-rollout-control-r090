@@ -9,14 +9,46 @@ import (
 )
 
 const (
-	MaxZoneRunes       = 253
-	MaxAuthorityRunes  = 253
-	MaxNodeNameRunes   = 180
-	MaxRegionRunes     = 48
-	MinRequestKeyRunes = 8
-	MaxRequestKeyRunes = 64
-	MaxEntries         = 500
+	MaxZoneRunes        = 253
+	MaxAuthorityRunes   = 253
+	MaxNodeNameRunes    = 180
+	MaxRegionRunes      = 48
+	MinRequestKeyRunes  = 8
+	MaxRequestKeyRunes  = 64
+	MaxEntries          = 500
+	MaxReleaseNoteRunes = 500
 )
+
+type ReleaseReason string
+
+const (
+	ReleaseReasonHandoverComplete ReleaseReason = "handover_complete"
+	ReleaseReasonRollback         ReleaseReason = "rollback"
+	ReleaseReasonNodeFailure      ReleaseReason = "node_failure"
+	ReleaseReasonPlanAborted      ReleaseReason = "plan_aborted"
+	ReleaseReasonOperatorRequest  ReleaseReason = "operator_request"
+	ReleaseReasonOther            ReleaseReason = "other"
+)
+
+func KnownReleaseReasons() []ReleaseReason {
+	return []ReleaseReason{
+		ReleaseReasonHandoverComplete,
+		ReleaseReasonRollback,
+		ReleaseReasonNodeFailure,
+		ReleaseReasonPlanAborted,
+		ReleaseReasonOperatorRequest,
+		ReleaseReasonOther,
+	}
+}
+
+func IsKnownReleaseReason(reason ReleaseReason) bool {
+	for _, known := range KnownReleaseReasons() {
+		if reason == known {
+			return true
+		}
+	}
+	return false
+}
 
 type PlanCreateInput struct {
 	Zone                string  `json:"zone"`
@@ -54,6 +86,46 @@ type ProbeInput struct {
 
 type AssessmentInput struct {
 	RequestKey string `json:"request_key"`
+}
+
+// ReleaseInput carries an optional idempotency key and an optional release
+// reason. All fields may be omitted so that a bodyless release request keeps
+// working.
+type ReleaseInput struct {
+	RequestKey string        `json:"request_key,omitempty"`
+	Reason     ReleaseReason `json:"reason,omitempty"`
+	Note       string        `json:"note,omitempty"`
+}
+
+// NormalizeReleaseInput trims the free-form note. Reason categories are not
+// case-folded so that unknown values fail validation with a stable error.
+func NormalizeReleaseInput(input ReleaseInput) ReleaseInput {
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	input.Reason = ReleaseReason(strings.TrimSpace(string(input.Reason)))
+	input.Note = strings.TrimSpace(input.Note)
+	return input
+}
+
+func ValidateReleaseInput(input ReleaseInput) error {
+	details := make(map[string]any)
+	if input.RequestKey != "" {
+		if err := validateRequestKey(input.RequestKey); err != nil {
+			details["request_key"] = err.Error()
+		}
+	}
+	if input.Reason != "" && !IsKnownReleaseReason(input.Reason) {
+		details["reason"] = "must be one of the known release reason categories"
+	}
+	if input.Note != "" && input.Reason == "" {
+		details["note"] = "requires a reason category"
+	}
+	if count := utf8.RuneCountInString(input.Note); count > MaxReleaseNoteRunes {
+		details["note"] = "must be at most 500 characters"
+	}
+	if len(details) > 0 {
+		return Validation("release input is invalid", details)
+	}
+	return nil
 }
 
 func NormalizePlanInput(input PlanCreateInput) PlanCreateInput {

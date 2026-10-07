@@ -129,7 +129,22 @@ func (s *Service) Allocate(
 	return group, err
 }
 
-func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease, error) {
+func (s *Service) Release(
+	ctx context.Context,
+	leaseID string,
+	input domain.ReleaseInput,
+) (domain.NodeLease, error) {
+	input = domain.NormalizeReleaseInput(input)
+	if input.Reason != "" && !domain.IsKnownReleaseReason(input.Reason) {
+		return domain.NodeLease{}, domain.NewError(domain.CodeUnknownReleaseReason, "release reason category is not known", map[string]any{
+			"lease_id": leaseID,
+			"reason":   input.Reason,
+		})
+	}
+	if err := domain.ValidateReleaseInput(input); err != nil {
+		return domain.NodeLease{}, err
+	}
+	fingerprint := domain.LeaseReleaseFingerprint(leaseID, input)
 	now := s.clock.Now().UTC()
 	var result domain.NodeLease
 	err := s.store.Write(ctx, func(state *domain.State) error {
@@ -137,15 +152,47 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 		if !ok {
 			return domain.NotFound("lease", leaseID)
 		}
+
+		// A finished lease is immutable. Replays of the original release
+		// operation return the stored lease; every other request fails with a
+		// stable error and must never rewrite the terminal state.
 		if lease.State == domain.LeaseReleased || lease.State == domain.LeaseExpired {
+			if input.RequestKey != "" && lease.ReleaseRequestKey != input.RequestKey {
+				return domain.NewError(domain.CodeLeaseReleaseConflict, "lease is already finished", map[string]any{
+					"lease_id":             leaseID,
+					"state":                lease.State,
+					"request_key":          input.RequestKey,
+					"original_request_key": lease.ReleaseRequestKey,
+				})
+			}
+			if lease.ReleaseRequestKey != "" && lease.ReleaseRequestKey == input.RequestKey {
+				existingFingerprint := domain.LeaseReleaseFingerprint(leaseID, domain.ReleaseInput{
+					RequestKey: lease.ReleaseRequestKey,
+					Reason:     lease.ReleaseReason,
+					Note:       lease.ReleaseNote,
+				})
+				if existingFingerprint != fingerprint {
+					return domain.NewError(domain.CodeIdempotencyConflict, "request key was reused with different release parameters", map[string]any{
+						"lease_id":    leaseID,
+						"request_key": input.RequestKey,
+					})
+				}
+			}
 			result = lease
 			return nil
 		}
 		if lease.State != domain.LeaseClaimed {
-			return domain.InvalidState("only a claimed lease can be released", map[string]any{
+			// Reported, released and (normally) expired leases are all
+			// terminal for a release request. Finished states were handled
+			// above as idempotent replays; anything else is a stable conflict.
+			details := map[string]any{
 				"lease_id": leaseID,
 				"state":    lease.State,
-			})
+			}
+			if lease.State == domain.LeaseReported {
+				details["probe_id"] = lease.ProbeID
+			}
+			return domain.InvalidState("only a claimed lease can be released", details)
 		}
 		node, ok := state.Nodes[lease.NodeID]
 		if !ok {
@@ -156,6 +203,9 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 		finishedAt := now
 		lease.State = domain.LeaseReleased
 		lease.FinishedAt = &finishedAt
+		lease.ReleaseRequestKey = input.RequestKey
+		lease.ReleaseReason = input.Reason
+		lease.ReleaseNote = input.Note
 		state.Leases[leaseID] = lease
 		if node.State == domain.NodeLeased {
 			node.State = domain.NodeReady
@@ -163,7 +213,21 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 			node.UpdatedAt = now
 			state.Nodes[node.ID] = node
 		}
-		store.AddAudit(state, s.ids, "lease", leaseID, "released", now, nil)
+		attributes := map[string]any{
+			"plan_id":       lease.PlanID,
+			"node_id":       lease.NodeID,
+			"allocation_id": lease.AllocationID,
+		}
+		if input.RequestKey != "" {
+			attributes["request_key"] = input.RequestKey
+		}
+		if input.Reason != "" {
+			attributes["reason"] = input.Reason
+		}
+		if input.Note != "" {
+			attributes["note"] = input.Note
+		}
+		store.AddAudit(state, s.ids, "lease", leaseID, "released", now, attributes)
 		result = lease
 		return nil
 	})

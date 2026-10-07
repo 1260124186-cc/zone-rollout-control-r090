@@ -89,3 +89,17 @@ func submitProbe(
 	}, &result)
 	return result, err
 }
+
+func releaseLease(
+	harness *harness,
+	leaseID string,
+	input domain.ReleaseInput,
+) (domain.NodeLease, error) {
+	var result domain.NodeLease
+	var body any
+	if input != (domain.ReleaseInput{}) {
+		body = input
+	}
+	err := harness.call(http.MethodPatch, "/v1/leases/"+leaseID+"/release", body, &result)
+	return result, err
+}
