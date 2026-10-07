@@ -21,7 +21,16 @@ func (s *Server) allocateLeases(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) releaseLease(w http.ResponseWriter, r *http.Request) {
-	lease, err := s.allocations.Release(r.Context(), r.PathValue("id"))
+	// The original body-less release request remains valid; the reason
+	// category, note, and idempotency request key are all optional.
+	var input domain.ReleaseInput
+	if r.ContentLength != 0 {
+		if err := decode(w, r, &input); err != nil {
+			sendError(w, r, err)
+			return
+		}
+	}
+	lease, err := s.allocations.Release(r.Context(), r.PathValue("id"), input)
 	if err != nil {
 		sendError(w, r, err)
 		return

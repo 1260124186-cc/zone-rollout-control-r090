@@ -129,7 +129,16 @@ func (s *Service) Allocate(
 	return group, err
 }
 
-func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease, error) {
+func (s *Service) Release(
+	ctx context.Context,
+	leaseID string,
+	input domain.ReleaseInput,
+) (domain.NodeLease, error) {
+	input = domain.NormalizeReleaseInput(input)
+	if err := domain.ValidateReleaseInput(input); err != nil {
+		return domain.NodeLease{}, err
+	}
+	fingerprint := domain.ReleaseFingerprint(leaseID, input)
 	now := s.clock.Now().UTC()
 	var result domain.NodeLease
 	err := s.store.Write(ctx, func(state *domain.State) error {
@@ -137,7 +146,52 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 		if !ok {
 			return domain.NotFound("lease", leaseID)
 		}
-		if lease.State == domain.LeaseReleased || lease.State == domain.LeaseExpired {
+
+		// A keyed request is an idempotent operation: the identical replay
+		// returns the original terminal lease and the first release reason.
+		if input.RequestKey != "" {
+			requestIndex := leaseID + "\x00" + input.RequestKey
+			if existingID, exists := state.ReleaseRequestKeys[requestIndex]; exists {
+				existing, found := state.LeaseReleases[existingID]
+				if !found {
+					return domain.NewError(domain.CodeStorageFailure, "release request index is inconsistent", map[string]any{
+						"release_id": existingID,
+					})
+				}
+				if existing.PayloadFingerprint != fingerprint {
+					return domain.NewError(domain.CodeIdempotencyConflict, "request key was reused with different release content", map[string]any{
+						"lease_id":    leaseID,
+						"request_key": input.RequestKey,
+					})
+				}
+				current, found := state.Leases[existing.LeaseID]
+				if !found {
+					return domain.NewError(domain.CodeStorageFailure, "release references a missing lease", map[string]any{
+						"lease_id": existing.LeaseID,
+					})
+				}
+				result = current
+				return nil
+			}
+		}
+
+		if lease.State == domain.LeaseReleased {
+			if input.RequestKey != "" {
+				return domain.NewError(domain.CodeReleaseConflict, "lease was already released by another request", map[string]any{
+					"lease_id": leaseID,
+					"state":    lease.State,
+				})
+			}
+			result = lease
+			return nil
+		}
+		if lease.State == domain.LeaseExpired {
+			if input.RequestKey != "" {
+				return domain.NewError(domain.CodeLeaseExpired, "lease has expired and cannot be released", map[string]any{
+					"lease_id": leaseID,
+					"state":    lease.State,
+				})
+			}
 			result = lease
 			return nil
 		}
@@ -153,9 +207,33 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 				"node_id": lease.NodeID,
 			})
 		}
+
+		releaseID := s.ids.New("rel")
+		reason := domain.ReleaseReason(input.ReasonCategory)
+		release := domain.LeaseRelease{
+			ID:                 releaseID,
+			LeaseID:            leaseID,
+			PlanID:             lease.PlanID,
+			NodeID:             lease.NodeID,
+			RequestKey:         input.RequestKey,
+			ReasonCategory:     reason,
+			PayloadFingerprint: fingerprint,
+			ReleasedAt:         now,
+		}
+		if input.ReasonNote != "" {
+			release.ReasonNote = input.ReasonNote
+		}
+		state.LeaseReleases[releaseID] = release
+		if input.RequestKey != "" {
+			state.ReleaseRequestKeys[leaseID+"\x00"+input.RequestKey] = releaseID
+		}
+
 		finishedAt := now
 		lease.State = domain.LeaseReleased
 		lease.FinishedAt = &finishedAt
+		lease.ReleaseID = releaseID
+		lease.ReleaseReason = reason
+		lease.ReleaseNote = release.ReasonNote
 		state.Leases[leaseID] = lease
 		if node.State == domain.NodeLeased {
 			node.State = domain.NodeReady
@@ -163,7 +241,22 @@ func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease
 			node.UpdatedAt = now
 			state.Nodes[node.ID] = node
 		}
-		store.AddAudit(state, s.ids, "lease", leaseID, "released", now, nil)
+
+		attributes := map[string]any{
+			"plan_id":    lease.PlanID,
+			"node_id":    lease.NodeID,
+			"release_id": releaseID,
+		}
+		if input.RequestKey != "" {
+			attributes["request_key"] = input.RequestKey
+		}
+		if input.ReasonCategory != "" {
+			attributes["reason_category"] = input.ReasonCategory
+		}
+		if input.ReasonNote != "" {
+			attributes["reason_note"] = input.ReasonNote
+		}
+		store.AddAudit(state, s.ids, "lease", leaseID, "released", now, attributes)
 		result = lease
 		return nil
 	})

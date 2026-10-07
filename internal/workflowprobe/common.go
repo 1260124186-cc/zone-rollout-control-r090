@@ -89,3 +89,13 @@ func submitProbe(
 	}, &result)
 	return result, err
 }
+
+func releaseLease(
+	harness *harness,
+	leaseID string,
+	body any,
+) (domain.NodeLease, error) {
+	var lease domain.NodeLease
+	err := harness.call(http.MethodPatch, "/v1/leases/"+leaseID+"/release", body, &lease)
+	return lease, err
+}

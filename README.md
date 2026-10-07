@@ -127,6 +127,20 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/leases/<lease_id>/probes \
   }'
 ```
 
+提前释放租约（正文整体可选，便于现场交接时说明原因）：
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/leases/<lease_id>/release \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_key": "release-request-0001",
+    "reason_category": "plan_abandoned",
+    "reason_note": "现场交接：窗口取消，提前归还节点"
+  }'
+```
+
+原因类别固定为 `plan_abandoned`、`node_recycled`、`operator_choice`、`reassigned`、`zone_rollback` 或 `other`；说明最长 500 字符。不带正文的释放请求继续可用。同键同内容重放返回原租约并复用首次原因；同键异内容返回 `idempotency_conflict`，被其他操作释放时返回 `lease_release_conflict`。
+
 请求一致性判定：
 
 ```bash

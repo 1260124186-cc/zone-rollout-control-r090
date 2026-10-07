@@ -9,13 +9,14 @@ import (
 )
 
 const (
-	MaxZoneRunes       = 253
-	MaxAuthorityRunes  = 253
-	MaxNodeNameRunes   = 180
-	MaxRegionRunes     = 48
-	MinRequestKeyRunes = 8
-	MaxRequestKeyRunes = 64
-	MaxEntries         = 500
+	MaxZoneRunes        = 253
+	MaxAuthorityRunes   = 253
+	MaxNodeNameRunes    = 180
+	MaxRegionRunes      = 48
+	MinRequestKeyRunes  = 8
+	MaxRequestKeyRunes  = 64
+	MaxReleaseNoteRunes = 500
+	MaxEntries          = 500
 )
 
 type PlanCreateInput struct {
@@ -42,6 +43,15 @@ type LeaseInput struct {
 	Region       string `json:"region"`
 	LeaseSeconds int    `json:"lease_seconds"`
 	MaxNodes     int    `json:"max_nodes"`
+}
+
+// ReleaseInput carries the optional idempotency key and reason for an
+// early lease release. Every field is optional so the original
+// body-less release request stays valid.
+type ReleaseInput struct {
+	RequestKey     string `json:"request_key"`
+	ReasonCategory string `json:"reason_category"`
+	ReasonNote     string `json:"reason_note"`
 }
 
 type ProbeInput struct {
@@ -217,6 +227,58 @@ func ValidateLeaseInput(input LeaseInput) error {
 		return Validation("lease input is invalid", details)
 	}
 	return nil
+}
+
+func NormalizeReleaseInput(input ReleaseInput) ReleaseInput {
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	input.ReasonCategory = strings.TrimSpace(strings.ToLower(input.ReasonCategory))
+	input.ReasonNote = strings.TrimSpace(input.ReasonNote)
+	return input
+}
+
+func ValidateReleaseInput(input ReleaseInput) error {
+	details := make(map[string]any)
+	if input.RequestKey != "" {
+		if err := validateRequestKey(input.RequestKey); err != nil {
+			details["request_key"] = err.Error()
+		}
+	}
+	if input.ReasonCategory != "" && !IsValidReleaseReason(ReleaseReason(input.ReasonCategory)) {
+		details["reason_category"] = "must be one of " + strings.Join(ReleaseReasons(), ", ")
+	}
+	if count := utf8.RuneCountInString(input.ReasonNote); count > MaxReleaseNoteRunes {
+		details["reason_note"] = "must be at most 500 characters"
+	}
+	if len(details) > 0 {
+		return Validation("release input is invalid", details)
+	}
+	return nil
+}
+
+func IsValidReleaseReason(reason ReleaseReason) bool {
+	for _, candidate := range releaseReasons {
+		if reason == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func ReleaseReasons() []string {
+	values := make([]string, 0, len(releaseReasons))
+	for _, reason := range releaseReasons {
+		values = append(values, string(reason))
+	}
+	return values
+}
+
+var releaseReasons = []ReleaseReason{
+	ReleaseReasonPlanAbandoned,
+	ReleaseReasonNodeRecycled,
+	ReleaseReasonOperatorChoice,
+	ReleaseReasonReassigned,
+	ReleaseReasonZoneRollback,
+	ReleaseReasonOther,
 }
 
 func ValidateProbeInput(input ProbeInput, now time.Time) error {

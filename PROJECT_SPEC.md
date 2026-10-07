@@ -56,6 +56,27 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `state`：`claimed`、`reported`、`released` 或 `expired`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
+- `release_id`、`release_reason`、`release_note`：首次释放记录、原因类别和现场交接说明。
+
+### LeaseRelease
+
+一次提前释放请求的幂等操作记录。
+
+- `id`、`lease_id`、`plan_id`、`node_id`。
+- `request_key`：可选的操作请求键，用于重放识别。
+- `reason_category`：可选原因类别；`reason_note`：可选说明（最长 500 字符）。
+- `payload_fingerprint`：请求内容指纹；`released_at`。
+
+原因类别只接受以下稳定值：
+
+- `plan_abandoned`
+- `node_recycled`
+- `operator_choice`
+- `reassigned`
+- `zone_rollback`
+- `other`
+
+无请求键的释放请求不建立操作记录索引，保持原有行为。
 
 ### LeaseGroup
 
@@ -107,6 +128,16 @@ ready --lease--> leased --report--> ready
 - 一个节点同一时刻最多有一个 `claimed` 租约。
 - 租约到期后不能提交探针。
 - 首次有效探针完成后，租约转为 `reported`，节点恢复 `ready`。
+
+### 提前释放规则
+
+- 只有 `claimed` 租约可以提前释放；`reported` 租约返回 `invalid_state`。
+- 释放请求正文整体可选：不带正文或空正文的请求继续可用，此时不记录原因。
+- `reason_category` 必须是稳定枚举之一，未知类别返回 `validation_failed`；`reason_note` 最长 500 字符。
+- 带 `request_key` 的释放是幂等操作：同键同内容重放返回原租约并复用首次原因与终态时间，不追加审计；同键异内容返回 `idempotency_conflict`。
+- 租约已被另一个操作释放时，新的带键请求返回 `lease_release_conflict`；已过期租约的带键释放返回 `lease_expired`。
+- 无请求键的重复释放保持兼容，返回当前终态租约。
+- 首次释放把租约、计划、节点、操作请求键和原因类别/说明一并追加到审计事件。
 
 ### 区域版本规则
 
@@ -178,6 +209,21 @@ ready --lease--> leased --report--> ready
 成功行为：每个节点获得一个有期限的 `claimed` 租约。
 
 失败行为：计划非活动、无可用节点、请求键同键异载荷或保存失败时不会产生部分租约。
+
+### W2b 提前释放租约
+
+入口：`PATCH /v1/leases/{id}/release`。
+
+步骤：
+
+1. 入口对正文整体可选：无正文时视为无原因释放；有正文时严格解码并校验请求键、原因类别和说明长度。
+2. 分配服务在同一锁内事务中识别重放、终态竞态和非法状态。
+3. 首次释放写入 `LeaseRelease` 操作记录，把租约置为 `released`、节点恢复 `ready`，并在租约上保存首次原因。
+4. 审计事件追加租约、计划、节点、操作请求键和原因；重放和冲突不写审计。
+
+成功行为：`claimed` 租约提前结束并携带原因；同键同内容重放返回原租约、复用首次原因。
+
+失败行为：未知原因类别、已上报租约、同键异载荷、被其他操作释放的并发请求返回稳定错误，不修改终态。
 
 ### W3 探针登记
 

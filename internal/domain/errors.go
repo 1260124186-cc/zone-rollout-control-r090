@@ -17,6 +17,7 @@ const (
 	CodeNodeUnavailable     ErrorCode = "node_unavailable"
 	CodeLeaseExpired        ErrorCode = "lease_expired"
 	CodeLeaseNotClaimed     ErrorCode = "lease_not_claimed"
+	CodeReleaseConflict     ErrorCode = "lease_release_conflict"
 	CodeNoProbes            ErrorCode = "no_probes"
 	CodeConflict            ErrorCode = "conflict"
 	CodeStorageFailure      ErrorCode = "storage_failure"

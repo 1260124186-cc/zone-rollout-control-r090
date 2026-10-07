@@ -78,6 +78,10 @@ func (h *harness) close() {
 	_ = os.RemoveAll(h.tempDir)
 }
 
+func (h *harness) statePath() string {
+	return h.tempDir + "/state.json"
+}
+
 func (h *harness) call(method string, path string, requestBody any, target any) error {
 	var payload []byte
 	var err error
